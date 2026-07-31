@@ -16,7 +16,8 @@
     "require": {
         "typo3/cms-core": "^12.4 || ^13.4",
         "tmw/fpdm": "^2.9",
-		"in2code/powermail": "^12 || ^13 || dev-eap"
+		"in2code/powermail": "^12 || ^13 || dev-eap",
+		"cweagans/composer-patches": "^1.7"
     },
 	"extra": {
 		"typo3/cms": {
@@ -24,6 +25,11 @@
 		},
 		"branch-alias":{
 			"dev-main": "5.0.x-dev"
+		},
+		"patches": {
+			"tmw/fpdm": {
+				"Fix PHP 8.2 dynamic property deprecation (upstream PR codeshell/fpdm#69)": "https://raw.githubusercontent.com/lizbNet/powermailpdf/main/patches/tmw-fpdm-php82-dynamic-property.patch"
+			}
 		}
 	},
     "autoload": {

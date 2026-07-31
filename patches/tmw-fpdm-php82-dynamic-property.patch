@@ -1,0 +1,34 @@
+Fix PHP 8.2 "Creation of dynamic property" deprecation in tmw/fpdm.
+
+Declares $n explicitly instead of relying on implicit dynamic property
+creation, and guards a string-offset read in _bin2hex() with ??''.
+Without this, PHP 8.2 raises a deprecation notice for FPDM::$n; on any
+TYPO3 instance where SYS.exceptionalErrors includes E_DEPRECATED (the
+TYPO3 default), that notice is escalated to a fatal exception and PDF
+generation crashes with a 500.
+
+Cherry-picked from the (still open, unmerged as of 2026-07-31) upstream
+PR: https://github.com/codeshell/fpdm/pull/69
+Drop this patch if that PR is ever merged, or once tmw/fpdm ships a
+release that declares $n natively.
+
+--- a/src/fpdm.php	2026-07-31 06:50:15.311331303 +0200
++++ b/src/fpdm.php	2026-07-31 06:50:15.313295484 +0200
+@@ -113,6 +113,8 @@
+ 		var $needAppearancesTrue = false;	//boolean, indicates if /NeedAppearances is already set to true
+ 		var $isUTF8 = false;				//boolean (true for UTF-8, false for ISO-8859-1)
+ 		
++		protected int $n = 0;
++
+         /**
+          * Constructor
+          *
+@@ -1123,7 +1125,7 @@
+ 			$hex = "";
+ 			$i = 0;
+ 			do {
+-				$hex .= sprintf("%02X", ord($str[$i]));
++				$hex .= sprintf("%02X", ord($str[$i]??''));
+ 				$i++;
+ 			} while ($i < strlen($str));
+ 			return $hex;
