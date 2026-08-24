@@ -47,7 +47,7 @@ final class CreateActionBeforeRenderView
     protected function generatePdf(Mail $mail)
     {
 
-        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'];
+        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'] ?? [];
         $this->encoding = $settings['encoding']??'';
 
         /** @var Folder $folder */
@@ -122,7 +122,7 @@ final class CreateActionBeforeRenderView
      */
     protected function render(File $file, $label)
     {
-        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'];
+        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'] ?? [];
         $templatePath = GeneralUtility::getFileAbsFileName($settings['template']);
         $this->standaloneView->setFormat('html');
         $this->standaloneView->setTemplatePathAndFilename($templatePath);
@@ -142,24 +142,24 @@ final class CreateActionBeforeRenderView
      */
     public function __invoke(FormControllerCreateActionBeforeRenderViewEvent $event): void
     {
-        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'];
+        $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'] ?? [];
         $mail = $event->getMail();
         $formController = $event->getFormController();
 
-        if ($settings['enablePowermailPdf']) {
-            if ($settings['sourceFile']) {
+        if ($settings['enablePowermailPdf'] ?? false) {
+            if ($settings['sourceFile'] ?? false) {
                 if (!file_exists(GeneralUtility::getFileAbsFileName($settings['sourceFile']))) {
                     throw new \Exception("The file does not exist: " . $settings['sourceFile'] . " Please set correct path in plugin.tx_powermailpdf.settings.sourceFile", 1417520887);
                 }
             }
 
-            if ($settings['fillPdf']) {
+            if ($settings['fillPdf'] ?? false) {
                 $powermailPdfFile = $this->generatePdf($mail);
             } else {
                 $powermailPdfFile = null;
             }
 
-            if ($settings['showDownloadLink']) {
+            if ($settings['showDownloadLink'] ?? false) {
                 $label = LocalizationUtility::translate("download", "powermailpdf");
                 //Adds a field for the download link at the thx site
                 /* @var $answer Answer */
@@ -174,7 +174,7 @@ final class CreateActionBeforeRenderView
                 $mail->addAnswer($answer);
             }
 
-            if ($settings['email.']['attachFile']) {
+            if ($settings['email.']['attachFile'] ?? false) {
                 // set pdf filename for attachment via TypoScript
                 $settings = $formController->getSettings();
                 $settings['receiver']['addAttachment']['value'] = $powermailPdfFile->getForLocalProcessing(false);
