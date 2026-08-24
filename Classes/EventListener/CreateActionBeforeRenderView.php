@@ -17,7 +17,8 @@ use TYPO3\CMS\Extbase\Utility\LocalizationUtility;
 use TYPO3\CMS\Core\TypoScript\Parser\TypoScriptParser;
 use TYPO3\CMS\Core\TypoScript\TypoScriptService;
 use TYPO3\CMS\Frontend\ContentObject\ContentObjectRenderer;
-use TYPO3\CMS\Fluid\View\StandaloneView;
+use TYPO3\CMS\Core\View\ViewFactoryData;
+use TYPO3\CMS\Core\View\ViewFactoryInterface;
 use In2code\Powermail\Events\FormControllerCreateActionBeforeRenderViewEvent;
 
 
@@ -29,14 +30,74 @@ final class CreateActionBeforeRenderView
 {
     /** @var ResourceFactory */
     protected $resourceFactory;
-    private StandaloneView $standaloneView;
+    private ViewFactoryInterface $viewFactory;
 
     protected ?bool $encoding = null;
 
-    public function __construct(ResourceFactory $resourceFactory, StandaloneView $standaloneView)
+    public function __construct(ResourceFactory $resourceFactory, ViewFactoryInterface $viewFactory)
     {
         $this->resourceFactory = $resourceFactory;
-        $this->standaloneView = $standaloneView;
+        $this->viewFactory = $viewFactory;
+    }
+
+    /**
+     * Picks a template key from `templateSelector.map.` based on the
+     * selector field's submitted value (or `templateSelector.default` on
+     * no match). Returns null if `templates.`/`templateSelector.` aren't
+     * both configured, meaning the caller should fall back to the flat
+     * `sourceFile`/`fieldMap` settings.
+     */
+    protected function resolveTemplateKey(Mail $mail, array $settings): ?string
+    {
+        $selector = $settings['templateSelector.'] ?? null;
+        if (!isset($settings['templates.']) || !$selector) {
+            return null;
+        }
+
+        $templateKey = $selector['default'] ?? '';
+
+        foreach ($mail->getAnswers() as $answer) {
+            if ($answer->getField()->getMarker() !== $selector['field']) {
+                continue;
+            }
+
+            // check/multiselect fields always return an array from getValue()
+            foreach ((array)$answer->getValue() as $value) {
+                if (isset($selector['map.'][$value])) {
+                    return $selector['map.'][$value];
+                }
+            }
+        }
+
+        return $templateKey;
+    }
+
+    protected function resolveSourceFile(Mail $mail, array $settings): string
+    {
+        $templateKey = $this->resolveTemplateKey($mail, $settings);
+        if ($templateKey === null) {
+            return $settings['sourceFile'] ?? '';
+        }
+
+        return $settings['templates.'][$templateKey . '.']['sourceFile'] ?? $settings['sourceFile'] ?? '';
+    }
+
+    /**
+     * Field map to use for this submission: `templates.<key>.fieldMap.` when
+     * a matching template defines its own override, otherwise the shared
+     * flat `fieldMap.` setting.
+     */
+    protected function resolveFieldMap(Mail $mail, array $settings): array
+    {
+        $templateKey = $this->resolveTemplateKey($mail, $settings);
+        if ($templateKey !== null) {
+            $templateFieldMap = $settings['templates.'][$templateKey . '.']['fieldMap.'] ?? null;
+            if ($templateFieldMap !== null) {
+                return $templateFieldMap;
+            }
+        }
+
+        return $settings['fieldMap.'] ?? [];
     }
 
     /**
@@ -59,7 +120,7 @@ final class CreateActionBeforeRenderView
         }
 
         //Normal Fields
-        $fieldMap = $settings['fieldMap.'];
+        $fieldMap = $this->resolveFieldMap($mail, $settings);
 
         $answers = $mail->getAnswers();
 
@@ -72,7 +133,7 @@ final class CreateActionBeforeRenderView
             }
         }
 
-        $pdfOriginal = GeneralUtility::getFileAbsFileName($GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.']['sourceFile']);
+        $pdfOriginal = GeneralUtility::getFileAbsFileName($this->resolveSourceFile($mail, $settings));
 
         if (!empty($pdfOriginal)) {
             $pdfFlatTempFile = (string) null;
@@ -124,14 +185,19 @@ final class CreateActionBeforeRenderView
     {
         $settings = $GLOBALS['TYPO3_REQUEST']->getAttribute('frontend.typoscript')->getSetupArray()['plugin.']['tx_powermailpdf.']['settings.'];
         $templatePath = GeneralUtility::getFileAbsFileName($settings['template']);
-        $this->standaloneView->setFormat('html');
-        $this->standaloneView->setTemplatePathAndFilename($templatePath);
-        $this->standaloneView->assignMultiple([
+        $view = $this->viewFactory->create(
+            new ViewFactoryData(
+                templatePathAndFilename: $templatePath,
+                request: $GLOBALS['TYPO3_REQUEST'] ?? null,
+                format: 'html',
+            )
+        );
+        $view->assignMultiple([
             'link' => $file->getPublicUrl(),
             'label' => $label
         ]);
 
-        return $this->standaloneView->render();
+        return $view->render();
     }
 
     /**
@@ -147,9 +213,10 @@ final class CreateActionBeforeRenderView
         $formController = $event->getFormController();
 
         if ($settings['enablePowermailPdf']) {
-            if ($settings['sourceFile']) {
-                if (!file_exists(GeneralUtility::getFileAbsFileName($settings['sourceFile']))) {
-                    throw new \Exception("The file does not exist: " . $settings['sourceFile'] . " Please set correct path in plugin.tx_powermailpdf.settings.sourceFile", 1417520887);
+            $resolvedSourceFile = $this->resolveSourceFile($mail, $settings);
+            if ($resolvedSourceFile) {
+                if (!file_exists(GeneralUtility::getFileAbsFileName($resolvedSourceFile))) {
+                    throw new \Exception("The file does not exist: " . $resolvedSourceFile . " Please set correct path in plugin.tx_powermailpdf.settings.sourceFile (or templates.<key>.sourceFile)", 1417520887);
                 }
             }
 
