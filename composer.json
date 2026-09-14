@@ -1,5 +1,6 @@
 {
     "name": "undkonsorten/powermailpdf",
+    "version": "dev-main",
     "type": "typo3-cms-extension",
     "description": "Powermail PDF Form",
     "homepage": "https://www.undkonsorten.com",
@@ -14,9 +15,9 @@
     "license": ["GPL-2.0+"],
     "keywords": ["pdf", "TYPO3", "powermail"],
     "require": {
-        "typo3/cms-core": "^12.4 || ^13.4",
+        "typo3/cms-core": "^12.4 || ^13.4 || ^14.3",
         "tmw/fpdm": "^2.9",
-		"in2code/powermail": "^12 || ^13 || dev-eap",
+		"in2code/powermail": "^12 || ^13 || ^14.0 || dev-eap",
 		"cweagans/composer-patches": "^1.7"
     },
 	"extra": {
@@ -28,7 +29,7 @@
 		},
 		"patches": {
 			"tmw/fpdm": {
-				"Fix PHP 8.2 dynamic property deprecation (upstream PR codeshell/fpdm#69)": "https://raw.githubusercontent.com/lizbNet/powermailpdf/main/patches/tmw-fpdm-php82-dynamic-property.patch"
+				"Fix PHP 8.2 dynamic property deprecation (upstream PR codeshell/fpdm#69)": "extensions/powermailpdf/patches/tmw-fpdm-php82-dynamic-property.patch"
 			}
 		}
 	},
