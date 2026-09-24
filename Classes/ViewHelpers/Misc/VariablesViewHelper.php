@@ -10,7 +10,6 @@ use In2code\Powermail\Utility\TemplateUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Extbase\Configuration\Exception\InvalidConfigurationTypeException;
 use TYPO3Fluid\Fluid\Core\ViewHelper\AbstractViewHelper;
-use TYPO3\CMS\Fluid\View\StandaloneView;
 
 /**
  * Class VariablesViewHelper
@@ -41,14 +40,10 @@ class VariablesViewHelper extends AbstractViewHelper
     /** @var MailRepository */
     protected object $mailRepository;
 
-    /** @var StandaloneView */
-    protected object $standaloneView;
-
     public function __construct()
     {
         $this->configurationService = GeneralUtility::makeInstance(ConfigurationService::class);
         $this->mailRepository = GeneralUtility::makeInstance(MailRepository::class);
-        $this->standaloneView = GeneralUtility::makeInstance(StandaloneView::class);
     }
 
     /**
@@ -73,7 +68,7 @@ class VariablesViewHelper extends AbstractViewHelper
         $mail = $this->arguments['mail'];
         $type = $this->arguments['type'];
         $function = $this->arguments['function'];
-        $this->standaloneView->setTemplateSource($this->removePowermailAllParagraphTagWrap($this->renderChildren()));
+        $templateSource = $this->removePowermailAllParagraphTagWrap($this->renderChildren());
 
         $variables = $this->mailRepository->getVariablesWithMarkersFromMail($mail);
         foreach ($variables as $key => $value){
@@ -81,14 +76,13 @@ class VariablesViewHelper extends AbstractViewHelper
                 $variables[$key] = html_entity_decode((string)$value);
             }
         }
-        $this->standaloneView->assignMultiple(
-            $variables
-        );
-        $this->standaloneView->assignMultiple(
+        $variables = array_merge(
+            $variables,
             ArrayUtility::htmlspecialcharsOnArray($this->mailRepository->getLabelsWithMarkersFromMail($mail))
         );
-        $this->standaloneView->assign('powermail_all', TemplateUtility::powermailAll($mail, $type, $this->settings, $function));
-        return html_entity_decode($this->standaloneView->render(), ENT_QUOTES, 'UTF-8');
+        $variables['powermail_all'] = TemplateUtility::powermailAll($mail, $type, $this->settings, $function);
+
+        return html_entity_decode(TemplateUtility::fluidParseString($templateSource, $variables), ENT_QUOTES, 'UTF-8');
     }
 
     /**
