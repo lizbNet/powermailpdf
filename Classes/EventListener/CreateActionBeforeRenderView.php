@@ -72,6 +72,33 @@ final class CreateActionBeforeRenderView
         return $templateKey;
     }
 
+    /**
+     * True when the answer of field `skipWhen.marker` equals `skipWhen.value`. Such a submission
+     * gets no PDF, no download link and no attachment (first use: registrations paid online,
+     * which finance invoices after payment). Not configured, or an empty value: never skipped.
+     */
+    protected function isSkipped(Mail $mail, array $settings): bool
+    {
+        $skipWhen = $settings['skipWhen.'] ?? null;
+        if (!is_array($skipWhen) || ($skipWhen['marker'] ?? '') === '' || ($skipWhen['value'] ?? '') === '') {
+            return false;
+        }
+
+        foreach ($mail->getAnswers() as $answer) {
+            if ($answer->getField()?->getMarker() !== $skipWhen['marker']) {
+                continue;
+            }
+
+            foreach ((array)$answer->getValue() as $value) {
+                if ((string)$value === (string)$skipWhen['value']) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     protected function resolveSourceFile(Mail $mail, array $settings): string
     {
         $templateKey = $this->resolveTemplateKey($mail, $settings);
@@ -212,7 +239,7 @@ final class CreateActionBeforeRenderView
         $mail = $event->getMail();
         $formController = $event->getFormController();
 
-        if ($settings['enablePowermailPdf'] ?? false) {
+        if (($settings['enablePowermailPdf'] ?? false) && !$this->isSkipped($mail, $settings)) {
             $resolvedSourceFile = $this->resolveSourceFile($mail, $settings);
             if ($resolvedSourceFile) {
                 if (!file_exists(GeneralUtility::getFileAbsFileName($resolvedSourceFile))) {
