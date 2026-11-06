@@ -34,8 +34,8 @@ final class CleanupCommand extends Command
     {
         $this
             ->addOption('older-than-days', null, InputOption::VALUE_REQUIRED, 'Delete PDFs last modified more than this many days ago (required, at least 1).')
-            ->addOption('folder', null, InputOption::VALUE_REQUIRED, 'Combined folder identifier (plugin.tx_powermailpdf.settings.target.pdf).', '1:powermailpdf')
-            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Only list what would be deleted.');
+            ->addOption('folder', null, InputOption::VALUE_REQUIRED, 'Combined folder identifier; must match plugin.tx_powermailpdf.settings.target.pdf.', '1:powermailpdf')
+            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'List what would be deleted, delete nothing.');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -48,7 +48,12 @@ final class CleanupCommand extends Command
             return Command::INVALID;
         }
 
-        $folder = $this->resourceFactory->getFolderObjectFromCombinedIdentifier((string)$input->getOption('folder'));
+        try {
+            $folder = $this->resourceFactory->getFolderObjectFromCombinedIdentifier((string)$input->getOption('folder'));
+        } catch (\Throwable $e) {
+            $io->error('Folder not found: ' . $input->getOption('folder') . ' (' . $e->getMessage() . ')');
+            return Command::INVALID;
+        }
         $cutoff = time() - (int)$days * 86400;
         $dryRun = (bool)$input->getOption('dry-run');
 
@@ -60,7 +65,7 @@ final class CleanupCommand extends Command
             }
             $matched++;
             if ($dryRun) {
-                $io->writeln($file->getIdentifier(), OutputInterface::VERBOSITY_VERBOSE);
+                $io->writeln($file->getIdentifier());
                 continue;
             }
             try {
@@ -71,15 +76,19 @@ final class CleanupCommand extends Command
             }
         }
 
-        $io->success(sprintf(
-            '%s %d PDF(s) older than %d day(s) in %s.%s',
+        $summary = sprintf(
+            '%s %d PDF(s) older than %d day(s) in %s.',
             $dryRun ? 'Would delete' : 'Deleted',
             $matched - $failed,
             (int)$days,
-            $folder->getCombinedIdentifier(),
-            $failed > 0 ? sprintf(' %d failed.', $failed) : ''
-        ));
+            $folder->getCombinedIdentifier()
+        );
+        if ($failed > 0) {
+            $io->warning($summary . sprintf(' %d failed.', $failed));
+            return Command::FAILURE;
+        }
+        $io->success($summary);
 
-        return $failed > 0 ? Command::FAILURE : Command::SUCCESS;
+        return Command::SUCCESS;
     }
 }

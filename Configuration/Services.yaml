@@ -9,9 +9,5 @@ services:
       - name: event.listener
         identifier: 'CreateActionBeforeRenderView'
 
-  Undkonsorten\Powermailpdf\Command\CleanupCommand:
-    tags:
-      - name: console.command
-        command: 'powermailpdf:cleanup'
-        description: 'Delete generated PDFs older than the given number of days.'
-        schedulable: true
+  # registered as a console command by its #[AsCommand] attribute (autoconfigure)
+  Undkonsorten\Powermailpdf\Command\CleanupCommand: ~
