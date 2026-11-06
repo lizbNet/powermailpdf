@@ -8,3 +8,6 @@ services:
     tags:
       - name: event.listener
         identifier: 'CreateActionBeforeRenderView'
+
+  # registered as a console command by its #[AsCommand] attribute (autoconfigure)
+  Undkonsorten\Powermailpdf\Command\CleanupCommand: ~
