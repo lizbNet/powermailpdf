@@ -8,11 +8,14 @@ namespace Undkonsorten\Powermailpdf\Renderer;
  * Turns a submission's answers (by marker) and the form's renderer settings into the
  * {invoice} and {seller} variables of a Fluid invoice template.
  *
- * Amounts: the gross total is the submitted invoice_price_all (sw_connector copies the
- * total from invoice_price); net and VAT are derived here from the total with the same
- * formula as the form's script (net = round(gross / (1 + rate), 2), VAT = gross - net), so a
- * browser-supplied net or VAT value never reaches the document. The unit price is the total
- * divided by the number of participants.
+ * Default (DWU): one line; the gross total is the submitted invoice_price_all (sw_connector
+ * copies the total from invoice_price); net and VAT are derived here with the form script's
+ * formula (net = round(gross / (1 + rate), 2), VAT = gross - net), so a browser-supplied net or
+ * VAT never reaches the document; unit price = total / participants.
+ *
+ * fluid.items (issue 07, e.g. CEVF): several lines, each naming its own amount markers; an
+ * optional line (skipWhenEmpty) without amount is left out. fluid.totals names the total
+ * markers, else the totals are the sums of the lines. fluid.currency defaults to PLN.
  */
 final class InvoiceDataMapper
 {
@@ -24,15 +27,20 @@ final class InvoiceDataMapper
     public function map(array $answers, array $config): array
     {
         $vatRate = (int)($config['vatRate'] ?? 23);
-        $quantity = max(1, (int)$this->text($answers, 'event_participants_number'));
-        $gross = $this->amount($this->text($answers, 'invoice_price_all') ?: $this->text($answers, 'invoice_price'));
+        $items = is_array($config['items'] ?? null) && $config['items'] !== []
+            ? $this->configuredItems($answers, $config['items'], $vatRate)
+            : [$this->singleItem($answers, (string)($config['itemName'] ?? ''), $vatRate)];
+        $items = array_values(array_filter($items));
+
+        $totals = is_array($config['totals'] ?? null) ? $config['totals'] : [];
+        $totalGross = isset($totals['gross']) ? $this->amount($this->text($answers, (string)$totals['gross'])) : $this->sum($items, 'gross');
         // Issue 05: a missing, unreadable or zero amount is a failure (Admin Alert, mails without the
         // PDF), never an invoice PDF with 0,00 totals. Free registrations get no PDF at all (skipWhen).
-        if ($gross <= 0.0) {
+        if ($items === [] || $totalGross <= 0.0) {
             throw new \RuntimeException('No invoice amount in invoice_price_all / invoice_price', 1762800001);
         }
-        $net = round($gross / (1 + $vatRate / 100), 2);
-        $vat = round($gross - $net, 2);
+        $totalNet = isset($totals['net']) ? $this->amount($this->text($answers, (string)$totals['net'])) : $this->sum($items, 'net');
+        $totalVat = isset($totals['vat']) ? $this->amount($this->text($answers, (string)$totals['vat'])) : $this->sum($items, 'vat');
 
         $buyerName = $this->text($answers, 'invoice_name_all');
         if ($buyerName === '') {
@@ -51,24 +59,105 @@ final class InvoiceDataMapper
                     'city' => $this->text($answers, 'invoice_city'),
                     'nip' => $this->nip($this->text($answers, 'invoice_nip')),
                 ],
-                'items' => [[
-                    'name' => (string)($config['itemName'] ?? ''),
-                    'quantity' => $quantity,
-                    'unitGross' => round($gross / $quantity, 2),
-                    'net' => $net,
-                    'vatRate' => $vatRate,
-                    'vat' => $vat,
-                    'gross' => $gross,
-                ]],
+                'items' => $items,
+                'vatSummary' => $this->vatSummary($items),
                 'vatRate' => $vatRate,
-                'totalNet' => $net,
-                'totalVat' => $vat,
-                'totalGross' => $gross,
+                'totalNet' => $totalNet,
+                'totalVat' => $totalVat,
+                'totalGross' => $totalGross,
+                'currency' => strtoupper(trim((string)($config['currency'] ?? '') ?: 'PLN')),
                 'amountInWords' => $this->text($answers, 'invoice_price_text'),
                 'notes' => (string)($config['notes'] ?? ''),
             ],
             'seller' => array_map('strval', (array)($config['seller'] ?? [])),
         ];
+    }
+
+    /**
+     * DWU's original shape: one line, total from invoice_price_all (fallback invoice_price), net and
+     * VAT derived server-side, unit price = total / participants.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function singleItem(array $answers, string $name, int $vatRate): ?array
+    {
+        $gross = $this->amount($this->text($answers, 'invoice_price_all') ?: $this->text($answers, 'invoice_price'));
+        if ($gross <= 0.0) {
+            return null;
+        }
+        return $this->item($name, max(1, (int)$this->text($answers, 'event_participants_number')), $gross, null, null, $vatRate);
+    }
+
+    /**
+     * fluid.items.<key> { name, quantity (marker or number), gross, net, vat (markers), vatRate,
+     * skipWhenEmpty }. Without net/vat markers they are derived from gross.
+     *
+     * @param array<string|int, mixed> $definitions
+     * @return list<array<string, mixed>>
+     */
+    private function configuredItems(array $answers, array $definitions, int $defaultRate): array
+    {
+        ksort($definitions, SORT_NATURAL);
+        $items = [];
+        foreach ($definitions as $definition) {
+            if (!is_array($definition)) {
+                continue;
+            }
+            $gross = $this->amount($this->text($answers, (string)($definition['gross'] ?? '')));
+            if ($gross <= 0.0) {
+                // an optional line (dinner) left empty; a required one makes the whole PDF fail
+                if ((bool)($definition['skipWhenEmpty'] ?? false)) {
+                    continue;
+                }
+                return [];
+            }
+            $quantity = (string)($definition['quantity'] ?? '1');
+            $quantity = ctype_digit($quantity) ? (int)$quantity : (int)$this->text($answers, $quantity);
+            $net = isset($definition['net']) ? $this->amount($this->text($answers, (string)$definition['net'])) : null;
+            $vat = isset($definition['vat']) ? $this->amount($this->text($answers, (string)$definition['vat'])) : null;
+            $items[] = $this->item((string)($definition['name'] ?? ''), max(1, $quantity), $gross, $net, $vat,
+                (int)($definition['vatRate'] ?? $defaultRate));
+        }
+        return $items;
+    }
+
+    /** @return array<string, mixed> */
+    private function item(string $name, int $quantity, float $gross, ?float $net, ?float $vat, int $vatRate): array
+    {
+        $net ??= round($gross / (1 + $vatRate / 100), 2);
+        $vat ??= round($gross - $net, 2);
+        return [
+            'name' => $name,
+            'quantity' => $quantity,
+            'unitGross' => round($gross / $quantity, 2),
+            'net' => $net,
+            'vatRate' => $vatRate,
+            'vat' => $vat,
+            'gross' => $gross,
+        ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $items
+     * @return list<array{rate: int, net: float, vat: float, gross: float}>
+     */
+    private function vatSummary(array $items): array
+    {
+        $byRate = [];
+        foreach ($items as $item) {
+            $rate = (int)$item['vatRate'];
+            $byRate[$rate] ??= ['rate' => $rate, 'net' => 0.0, 'vat' => 0.0, 'gross' => 0.0];
+            foreach (['net', 'vat', 'gross'] as $key) {
+                $byRate[$rate][$key] = round($byRate[$rate][$key] + (float)$item[$key], 2);
+            }
+        }
+        return array_values($byRate);
+    }
+
+    /** @param list<array<string, mixed>> $items */
+    private function sum(array $items, string $key): float
+    {
+        return round(array_sum(array_map(static fn(array $item): float => (float)$item[$key], $items)), 2);
     }
 
     /** @param array<string, mixed> $answers */
