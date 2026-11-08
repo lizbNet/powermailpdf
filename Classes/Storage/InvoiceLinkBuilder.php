@@ -49,7 +49,9 @@ final class InvoiceLinkBuilder
         $query = $core + $this->signature->sign($file->getUid(), time());
 
         $request ??= $GLOBALS['TYPO3_REQUEST'] ?? null;
-        $base = PathUtility::getAbsoluteWebPath(Environment::getPublicPath() . '/index.php');
+        // The site root, not /index.php: the forms nginx marks the index.php location `internal`,
+        // so a direct /index.php request gets nginx's 404; / reaches TYPO3 through try_files.
+        $base = PathUtility::getAbsoluteWebPath(Environment::getPublicPath() . '/');
         if ($request instanceof ServerRequestInterface) {
             // absolute URL on the current host; without a request (CLI) the link stays relative
             $base = GeneralUtility::locationHeaderUrl($base, $request);

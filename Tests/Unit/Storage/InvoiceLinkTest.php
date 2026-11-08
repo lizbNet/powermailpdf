@@ -112,8 +112,11 @@ final class InvoiceLinkTest extends TestCase
 
     public function testBuilderLinksAnInvoiceFileThroughDumpFileWithExpiry(): void
     {
-        $query = $this->query($this->builder($this->file(42, self::INVOICE_STORAGE))->forFileUid('42'));
+        $url = $this->builder($this->file(42, self::INVOICE_STORAGE))->forFileUid('42');
+        $query = $this->query($url);
 
+        // site root, not /index.php (nginx serves index.php only internally)
+        self::assertStringNotContainsString('index.php', $url);
         self::assertSame('dumpFile', $query['eID']);
         self::assertSame('f', $query['t']);
         self::assertSame('42', $query['f']);
