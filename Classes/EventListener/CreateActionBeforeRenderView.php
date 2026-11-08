@@ -51,19 +51,29 @@ final class CreateActionBeforeRenderView
         $this->viewFactory = $viewFactory;
     }
 
+    /** @return array<string, mixed> marker => submitted value */
+    protected function answersByMarker(Mail $mail): array
+    {
+        $answers = [];
+        foreach ($mail->getAnswers() as $answer) {
+            $marker = $answer->getField()?->getMarker();
+            if ($marker !== null && $marker !== '') {
+                $answers[$marker] = $answer->getValue();
+            }
+        }
+        return $answers;
+    }
+
     /**
      * The mail has no uid yet (powermail saves it after this event), so the submission is named
      * by form, Invoice Number and Invoice Code.
      */
     protected function reportFailure(Mail $mail, \Throwable $error): void
     {
-        $answers = [];
-        foreach ($mail->getAnswers() as $answer) {
-            $marker = $answer->getField()?->getMarker();
-            if (in_array($marker, ['invoice_number', 'invoice_code_all'], true)) {
-                $answers[$marker] = (string)$answer->getValue();
-            }
-        }
+        $answers = array_map(
+            static fn($value): string => is_array($value) ? implode(', ', $value) : (string)$value,
+            $this->answersByMarker($mail)
+        );
         $form = $mail->getForm();
         $formName = trim(($form?->getTitle() ?? '') . ' (form ' . ($form?->getUid() ?? '?') . ')');
 
@@ -85,15 +95,7 @@ final class CreateActionBeforeRenderView
     {
         $config = $this->typoScriptService->convertTypoScriptArrayToPlainArray($settings['fluid.'] ?? []);
 
-        $answers = [];
-        foreach ($mail->getAnswers() as $answer) {
-            $marker = $answer->getField()?->getMarker();
-            if ($marker !== null && $marker !== '') {
-                $answers[$marker] = $answer->getValue();
-            }
-        }
-
-        $variables = $this->invoiceDataMapper->map($answers, $config) + [
+        $variables = $this->invoiceDataMapper->map($this->answersByMarker($mail), $config) + [
             'logo' => (string)($config['logo'] ?? ''),
             'styleSheet' => (string)($config['styleSheet'] ?? ''),
         ];
