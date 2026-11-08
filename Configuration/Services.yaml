@@ -14,3 +14,19 @@ services:
 
   Undkonsorten\Powermailpdf\Alert\:
     resource: '../Classes/Alert/*'
+
+  Undkonsorten\Powermailpdf\Storage\:
+    resource: '../Classes/Storage/*'
+
+  # eID=dumpFile: files in the invoice storage need our exp/sig (issue 03)
+  Undkonsorten\Powermailpdf\EventListener\InvoiceFileDumpGuard:
+    tags:
+      - name: event.listener
+        identifier: 'powermailpdf-invoice-file-dump-guard'
+
+  # registered as a console command by its #[AsCommand] attribute (autoconfigure)
+  Undkonsorten\Powermailpdf\Command\InvoiceStorageCommand: ~
+
+  Undkonsorten\Powermailpdf\ViewHelpers\InvoiceDownloadUriViewHelper:
+    public: true
+    shared: false
