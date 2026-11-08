@@ -104,7 +104,25 @@ final class InvoiceDataMapperTest extends TestCase
 
         self::assertSame(1234.5, $mapper->map($this->company(['invoice_price_all' => '1 234,50']), self::CONFIG)['invoice']['totalGross']);
         self::assertSame(1234.5, $mapper->map($this->company(['invoice_price_all' => '1,234.50']), self::CONFIG)['invoice']['totalGross']);
-        self::assertSame(0.0, $mapper->map($this->company(['invoice_price_all' => 'abc', 'invoice_price' => '']), self::CONFIG)['invoice']['totalGross']);
+    }
+
+    /** Issue 05: no invoice PDF with 0,00 totals; a missing amount takes the failure path (alert, mails without PDF). */
+    public function testMissingAmountIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => '', 'invoice_price' => '']), self::CONFIG);
+    }
+
+    public function testNonNumericAmountIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => 'abc', 'invoice_price' => '']), self::CONFIG);
+    }
+
+    public function testZeroAmountIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => '0.00', 'invoice_price' => '0']), self::CONFIG);
     }
 
     public function testUnusualNipIsKeptAsSubmitted(): void
