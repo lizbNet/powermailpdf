@@ -20,6 +20,10 @@ use TYPO3\CMS\Frontend\ContentObject\ContentObjectRenderer;
 use TYPO3\CMS\Core\View\ViewFactoryData;
 use TYPO3\CMS\Core\View\ViewFactoryInterface;
 use In2code\Powermail\Events\FormControllerCreateActionBeforeRenderViewEvent;
+use Psr\Log\LoggerInterface;
+use Undkonsorten\Powermailpdf\Alert\InvoicePdfFailureAlert;
+use Undkonsorten\Powermailpdf\Renderer\FluidPdfRenderer;
+use Undkonsorten\Powermailpdf\Renderer\InvoiceDataMapper;
 
 
 /**
@@ -34,10 +38,73 @@ final class CreateActionBeforeRenderView
 
     protected ?bool $encoding = null;
 
-    public function __construct(ResourceFactory $resourceFactory, ViewFactoryInterface $viewFactory)
-    {
+    public function __construct(
+        ResourceFactory $resourceFactory,
+        ViewFactoryInterface $viewFactory,
+        private readonly InvoiceDataMapper $invoiceDataMapper,
+        private readonly FluidPdfRenderer $fluidPdfRenderer,
+        private readonly TypoScriptService $typoScriptService,
+        private readonly LoggerInterface $logger,
+        private readonly InvoicePdfFailureAlert $failureAlert,
+    ) {
         $this->resourceFactory = $resourceFactory;
         $this->viewFactory = $viewFactory;
+    }
+
+    /** @return array<string, mixed> marker => submitted value */
+    protected function answersByMarker(Mail $mail): array
+    {
+        $answers = [];
+        foreach ($mail->getAnswers() as $answer) {
+            $marker = $answer->getField()?->getMarker();
+            if ($marker !== null && $marker !== '') {
+                $answers[$marker] = $answer->getValue();
+            }
+        }
+        return $answers;
+    }
+
+    /**
+     * The mail has no uid yet (powermail saves it after this event), so the submission is named
+     * by form, Invoice Number and Invoice Code.
+     */
+    protected function reportFailure(Mail $mail, \Throwable $error): void
+    {
+        $answers = array_map(
+            static fn($value): string => is_array($value) ? implode(', ', $value) : (string)$value,
+            $this->answersByMarker($mail)
+        );
+        $form = $mail->getForm();
+        $formName = trim(($form?->getTitle() ?? '') . ' (form ' . ($form?->getUid() ?? '?') . ')');
+
+        $this->logger->error('Invoice PDF could not be generated; mails go without it', [
+            'form' => $formName,
+            'invoiceNumber' => $answers['invoice_number'] ?? '',
+            'invoiceCode' => $answers['invoice_code_all'] ?? '',
+            'exception' => $error,
+        ]);
+        // The alert logs and swallows its own mailer errors.
+        $this->failureAlert->send($formName, $answers['invoice_number'] ?? '', $answers['invoice_code_all'] ?? '', $error);
+    }
+
+    /**
+     * `renderer = fluid`: the PDF comes from a pdfviewhelpers Fluid template (`fluid.template`)
+     * fed by InvoiceDataMapper, instead of FPDM filling `sourceFile`. Off by default.
+     */
+    protected function generateFluidPdf(Mail $mail, array $settings, Folder $folder): File
+    {
+        $config = $this->typoScriptService->convertTypoScriptArrayToPlainArray($settings['fluid.'] ?? []);
+
+        $variables = $this->invoiceDataMapper->map($this->answersByMarker($mail), $config) + [
+            'logo' => (string)($config['logo'] ?? ''),
+            'styleSheet' => (string)($config['styleSheet'] ?? ''),
+        ];
+        $pdf = $this->fluidPdfRenderer->render((string)($config['template'] ?? ''), $variables);
+
+        $tempFile = GeneralUtility::tempnam('invoice_', '.pdf');
+        GeneralUtility::writeFile($tempFile, $pdf);
+
+        return $folder->addFile($tempFile);
     }
 
     /**
@@ -141,6 +208,10 @@ final class CreateActionBeforeRenderView
         /** @var Folder $folder */
         $folder = $this->resourceFactory->getFolderObjectFromCombinedIdentifier($settings['target.']['pdf']);
 
+        if (($settings['renderer'] ?? 'fpdm') === 'fluid') {
+            return $this->generateFluidPdf($mail, $settings, $folder);
+        }
+
         // Include \FPDM library from phar file, if not included already (e.g. composer installation)
         if (!class_exists('\FPDM')) {
             @include 'phar://' . ExtensionManagementUtility::extPath('powermailpdf') . 'Resources/Private/PHP/fpdm.phar/vendor/autoload.php';
@@ -240,20 +311,25 @@ final class CreateActionBeforeRenderView
         $formController = $event->getFormController();
 
         if (($settings['enablePowermailPdf'] ?? false) && !$this->isSkipped($mail, $settings)) {
-            $resolvedSourceFile = $this->resolveSourceFile($mail, $settings);
+            $resolvedSourceFile = ($settings['renderer'] ?? 'fpdm') === 'fluid' ? '' : $this->resolveSourceFile($mail, $settings);
             if ($resolvedSourceFile) {
                 if (!file_exists(GeneralUtility::getFileAbsFileName($resolvedSourceFile))) {
                     throw new \Exception("The file does not exist: " . $resolvedSourceFile . " Please set correct path in plugin.tx_powermailpdf.settings.sourceFile (or templates.<key>.sourceFile)", 1417520887);
                 }
             }
 
+            $powermailPdfFile = null;
             if ($settings['fillPdf'] ?? false) {
-                $powermailPdfFile = $this->generatePdf($mail);
-            } else {
-                $powermailPdfFile = null;
+                // A failed render must not lose the submission or its Invoice ID: the mails go
+                // without the attachment and the error is logged (FPDM's die() can't be caught).
+                try {
+                    $powermailPdfFile = $this->generatePdf($mail);
+                } catch (\Throwable $e) {
+                    $this->reportFailure($mail, $e);
+                }
             }
 
-            if ($settings['showDownloadLink'] ?? false) {
+            if ($powermailPdfFile !== null && ($settings['showDownloadLink'] ?? false)) {
                 $label = LocalizationUtility::translate("download", "powermailpdf");
                 //Adds a field for the download link at the thx site
                 /* @var $answer Answer */
@@ -268,7 +344,7 @@ final class CreateActionBeforeRenderView
                 $mail->addAnswer($answer);
             }
 
-            if ($settings['email.']['attachFile'] ?? false) {
+            if ($powermailPdfFile !== null && ($settings['email.']['attachFile'] ?? false)) {
                 // set pdf filename for attachment via TypoScript
                 $settings = $formController->getSettings();
                 $settings['receiver']['addAttachment']['value'] = $powermailPdfFile->getForLocalProcessing(false);
