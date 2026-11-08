@@ -14,8 +14,12 @@ namespace Undkonsorten\Powermailpdf\Renderer;
  * VAT never reaches the document; unit price = total / participants.
  *
  * fluid.items (issue 07, e.g. CEVF): several lines, each naming its own amount markers; an
- * optional line (skipWhenEmpty) without amount is left out. fluid.totals names the total
- * markers, else the totals are the sums of the lines. fluid.currency defaults to PLN.
+ * optional line (skipWhenEmpty) without amount is left out. Net and VAT come from the named
+ * markers when configured (CEVF fills them server-side with the pricing pilot), else they are
+ * derived from gross as above. fluid.totals names the total markers, else the totals are the sums
+ * of the lines; a total that doesn't match its lines fails the PDF. Currency: price_currency
+ * answer, then fluid.currency, then PLN. A line's gross is the line total: with participants of
+ * different prices the unit price printed is their average (issue 07, open).
  */
 final class InvoiceDataMapper
 {
@@ -33,14 +37,23 @@ final class InvoiceDataMapper
         $items = array_values(array_filter($items));
 
         $totals = is_array($config['totals'] ?? null) ? $config['totals'] : [];
-        $totalGross = isset($totals['gross']) ? $this->amount($this->text($answers, (string)$totals['gross'])) : $this->sum($items, 'gross');
+        $totalGross = $this->markerAmount($answers, $totals['gross'] ?? null) ?? $this->sum($items, 'gross');
         // Issue 05: a missing, unreadable or zero amount is a failure (Admin Alert, mails without the
         // PDF), never an invoice PDF with 0,00 totals. Free registrations get no PDF at all (skipWhen).
         if ($items === [] || $totalGross <= 0.0) {
-            throw new \RuntimeException('No invoice amount in invoice_price_all / invoice_price', 1762800001);
+            throw new \RuntimeException('No invoice amount (gross of the line items or total)', 1762800001);
         }
-        $totalNet = isset($totals['net']) ? $this->amount($this->text($answers, (string)$totals['net'])) : $this->sum($items, 'net');
-        $totalVat = isset($totals['vat']) ? $this->amount($this->text($answers, (string)$totals['vat'])) : $this->sum($items, 'vat');
+        // Contradicting numbers on one document are worse than no document: fail into the alert path.
+        if (abs($totalGross - $this->sum($items, 'gross')) > 0.01) {
+            throw new \RuntimeException(sprintf('Invoice total %.2f does not match its lines (%.2f)', $totalGross, $this->sum($items, 'gross')), 1762800002);
+        }
+        $totalNet = $this->markerAmount($answers, $totals['net'] ?? null) ?? $this->sum($items, 'net');
+        $totalVat = $this->markerAmount($answers, $totals['vat'] ?? null) ?? $this->sum($items, 'vat');
+        $vatSummary = $this->vatSummary($items);
+        // One rate: the summary row is the total, so rounding per line can't make the two rows differ.
+        if (count($vatSummary) === 1) {
+            $vatSummary[0] = ['rate' => $vatSummary[0]['rate'], 'net' => $totalNet, 'vat' => $totalVat, 'gross' => $totalGross];
+        }
 
         $buyerName = $this->text($answers, 'invoice_name_all');
         if ($buyerName === '') {
@@ -60,12 +73,12 @@ final class InvoiceDataMapper
                     'nip' => $this->nip($this->text($answers, 'invoice_nip')),
                 ],
                 'items' => $items,
-                'vatSummary' => $this->vatSummary($items),
+                'vatSummary' => $vatSummary,
                 'vatRate' => $vatRate,
                 'totalNet' => $totalNet,
                 'totalVat' => $totalVat,
                 'totalGross' => $totalGross,
-                'currency' => strtoupper(trim((string)($config['currency'] ?? '') ?: 'PLN')),
+                'currency' => $this->currency($answers, $config),
                 'amountInWords' => $this->text($answers, 'invoice_price_text'),
                 'notes' => (string)($config['notes'] ?? ''),
             ],
@@ -113,8 +126,8 @@ final class InvoiceDataMapper
             }
             $quantity = (string)($definition['quantity'] ?? '1');
             $quantity = ctype_digit($quantity) ? (int)$quantity : (int)$this->text($answers, $quantity);
-            $net = isset($definition['net']) ? $this->amount($this->text($answers, (string)$definition['net'])) : null;
-            $vat = isset($definition['vat']) ? $this->amount($this->text($answers, (string)$definition['vat'])) : null;
+            $net = $this->markerAmount($answers, $definition['net'] ?? null);
+            $vat = $this->markerAmount($answers, $definition['vat'] ?? null);
             $items[] = $this->item((string)($definition['name'] ?? ''), max(1, $quantity), $gross, $net, $vat,
                 (int)($definition['vatRate'] ?? $defaultRate));
         }
@@ -152,6 +165,27 @@ final class InvoiceDataMapper
             }
         }
         return array_values($byRate);
+    }
+
+    /** Amount of the marker named in the settings; null when the setting is absent. */
+    private function markerAmount(array $answers, mixed $marker): ?float
+    {
+        return is_string($marker) && $marker !== '' ? $this->amount($this->text($answers, $marker)) : null;
+    }
+
+    /**
+     * The submitted price_currency first (sw_connector decides on the amount in words from it, so
+     * code and words agree), then fluid.currency, then PLN.
+     */
+    private function currency(array $answers, array $config): string
+    {
+        foreach ([$this->text($answers, 'price_currency'), (string)($config['currency'] ?? '')] as $candidate) {
+            $candidate = strtoupper(trim($candidate));
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+        return 'PLN';
     }
 
     /** @param list<array<string, mixed>> $items */

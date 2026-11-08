@@ -131,6 +131,41 @@ final class InvoiceDataMapperTest extends TestCase
         (new InvoiceDataMapper())->map($this->cevf(['invoice_price1_brutto' => '']), self::CEVF);
     }
 
+    public function testSingleRateRowEqualsTheTotalsFromMarkers(): void
+    {
+        // two 25.00 lines: per-line nets 20.33 + 20.33 = 40.66, but the form's total net is 40.65
+        $answers = $this->cevf([
+            'invoice_price1_brutto' => '25.00', 'invoice_price1_netto' => '20.33', 'invoice_vat1_amount' => '4.67',
+            'invoice_price2_brutto' => '25.00', 'invoice_price2_netto' => '20.33', 'invoice_vat2_amount' => '4.67',
+            'invoice_price_all_brutto' => '50.00', 'invoice_price_all_netto' => '40.65', 'invoice_vat_all_amount' => '9.35',
+        ]);
+        $invoice = (new InvoiceDataMapper())->map($answers, self::CEVF)['invoice'];
+
+        self::assertSame([['rate' => 23, 'net' => 40.65, 'vat' => 9.35, 'gross' => 50.0]], $invoice['vatSummary']);
+    }
+
+    public function testTotalsThatDoNotMatchTheLinesAreRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        (new InvoiceDataMapper())->map($this->cevf(['invoice_price_all_brutto' => '999.00']), self::CEVF);
+    }
+
+    public function testCurrencyComesFromTheSubmittedPriceCurrencyFirst(): void
+    {
+        $config = self::CEVF;
+        $config['currency'] = 'PLN';
+        $invoice = (new InvoiceDataMapper())->map($this->cevf(['price_currency' => ['eur']]), $config)['invoice'];
+
+        self::assertSame('EUR', $invoice['currency']);
+    }
+
+    public function testBlankCurrencyFallsBackToPln(): void
+    {
+        $config = self::CONFIG;
+        $config['currency'] = '   ';
+        self::assertSame('PLN', (new InvoiceDataMapper())->map($this->company(), $config)['invoice']['currency']);
+    }
+
     public function testDefaultsWithoutItemsConfigStayAsForDwu(): void
     {
         $invoice = (new InvoiceDataMapper())->map($this->company(), self::CONFIG)['invoice'];
