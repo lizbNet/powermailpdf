@@ -21,6 +21,7 @@ use TYPO3\CMS\Core\View\ViewFactoryData;
 use TYPO3\CMS\Core\View\ViewFactoryInterface;
 use In2code\Powermail\Events\FormControllerCreateActionBeforeRenderViewEvent;
 use Psr\Log\LoggerInterface;
+use Undkonsorten\Powermailpdf\Alert\InvoicePdfFailureAlert;
 use Undkonsorten\Powermailpdf\Renderer\FluidPdfRenderer;
 use Undkonsorten\Powermailpdf\Renderer\InvoiceDataMapper;
 
@@ -44,9 +45,39 @@ final class CreateActionBeforeRenderView
         private readonly FluidPdfRenderer $fluidPdfRenderer,
         private readonly TypoScriptService $typoScriptService,
         private readonly LoggerInterface $logger,
+        private readonly InvoicePdfFailureAlert $failureAlert,
     ) {
         $this->resourceFactory = $resourceFactory;
         $this->viewFactory = $viewFactory;
+    }
+
+    /**
+     * The mail has no uid yet (powermail saves it after this event), so the submission is named
+     * by form, Invoice Number and Invoice Code. A failing alert must not fail the submission.
+     */
+    protected function reportFailure(Mail $mail, \Throwable $error): void
+    {
+        $answers = [];
+        foreach ($mail->getAnswers() as $answer) {
+            $marker = $answer->getField()?->getMarker();
+            if (in_array($marker, ['invoice_number', 'invoice_code_all'], true)) {
+                $answers[$marker] = (string)$answer->getValue();
+            }
+        }
+        $form = $mail->getForm();
+        $formName = trim(($form?->getTitle() ?? '') . ' (form ' . ($form?->getUid() ?? '?') . ')');
+
+        $this->logger->error('Invoice PDF could not be generated; mails go without it', [
+            'form' => $formName,
+            'invoiceNumber' => $answers['invoice_number'] ?? '',
+            'invoiceCode' => $answers['invoice_code_all'] ?? '',
+            'exception' => $error,
+        ]);
+        try {
+            $this->failureAlert->send($formName, $answers['invoice_number'] ?? '', $answers['invoice_code_all'] ?? '', $error);
+        } catch (\Throwable $alertError) {
+            $this->logger->error('Invoice PDF failure alert could not be sent', ['exception' => $alertError]);
+        }
     }
 
     /**
@@ -178,13 +209,13 @@ final class CreateActionBeforeRenderView
         /** @var Folder $folder */
         $folder = $this->resourceFactory->getFolderObjectFromCombinedIdentifier($settings['target.']['pdf']);
 
+        if (($settings['renderer'] ?? 'fpdm') === 'fluid') {
+            return $this->generateFluidPdf($mail, $settings, $folder);
+        }
+
         // Include \FPDM library from phar file, if not included already (e.g. composer installation)
         if (!class_exists('\FPDM')) {
             @include 'phar://' . ExtensionManagementUtility::extPath('powermailpdf') . 'Resources/Private/PHP/fpdm.phar/vendor/autoload.php';
-        }
-
-        if (($settings['renderer'] ?? 'fpdm') === 'fluid') {
-            return $this->generateFluidPdf($mail, $settings, $folder);
         }
 
         //Normal Fields
@@ -281,7 +312,7 @@ final class CreateActionBeforeRenderView
         $formController = $event->getFormController();
 
         if (($settings['enablePowermailPdf'] ?? false) && !$this->isSkipped($mail, $settings)) {
-            $resolvedSourceFile = $this->resolveSourceFile($mail, $settings);
+            $resolvedSourceFile = ($settings['renderer'] ?? 'fpdm') === 'fluid' ? '' : $this->resolveSourceFile($mail, $settings);
             if ($resolvedSourceFile) {
                 if (!file_exists(GeneralUtility::getFileAbsFileName($resolvedSourceFile))) {
                     throw new \Exception("The file does not exist: " . $resolvedSourceFile . " Please set correct path in plugin.tx_powermailpdf.settings.sourceFile (or templates.<key>.sourceFile)", 1417520887);
@@ -295,11 +326,7 @@ final class CreateActionBeforeRenderView
                 try {
                     $powermailPdfFile = $this->generatePdf($mail);
                 } catch (\Throwable $e) {
-                    $this->logger->error('Invoice PDF could not be generated; mails go without it', [
-                        'mail' => $mail->getUid(),
-                        'form' => $mail->getForm()?->getUid(),
-                        'exception' => $e,
-                    ]);
+                    $this->reportFailure($mail, $e);
                 }
             }
 

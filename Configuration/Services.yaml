@@ -11,3 +11,6 @@ services:
 
   Undkonsorten\Powermailpdf\Renderer\:
     resource: '../Classes/Renderer/*'
+
+  Undkonsorten\Powermailpdf\Alert\:
+    resource: '../Classes/Alert/*'
