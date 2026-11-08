@@ -21,7 +21,7 @@ use TYPO3\CMS\Core\Utility\PathUtility;
 final class InvoiceLinkBuilder
 {
     public function __construct(
-        private readonly InvoiceStorage $invoiceStorage,
+        private readonly InvoiceFileStorage $invoiceStorage,
         private readonly InvoiceLinkSignature $signature,
         private readonly HashService $hashService,
         private readonly ResourceFactory $resourceFactory,
@@ -51,7 +51,8 @@ final class InvoiceLinkBuilder
         $request ??= $GLOBALS['TYPO3_REQUEST'] ?? null;
         $base = PathUtility::getAbsoluteWebPath(Environment::getPublicPath() . '/index.php');
         if ($request instanceof ServerRequestInterface) {
-            $base = GeneralUtility::locationHeaderUrl($base);
+            // absolute URL on the current host; without a request (CLI) the link stays relative
+            $base = GeneralUtility::locationHeaderUrl($base, $request);
         }
         return $base . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
     }

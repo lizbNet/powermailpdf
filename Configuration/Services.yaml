@@ -30,3 +30,6 @@ services:
   Undkonsorten\Powermailpdf\ViewHelpers\InvoiceDownloadUriViewHelper:
     public: true
     shared: false
+
+  Undkonsorten\Powermailpdf\Storage\InvoiceFileStorage:
+    alias: Undkonsorten\Powermailpdf\Storage\InvoiceStorage

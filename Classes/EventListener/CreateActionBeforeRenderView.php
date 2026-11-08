@@ -344,6 +344,11 @@ final class CreateActionBeforeRenderView
                 // A failed render must not lose the submission or its Invoice ID: the mails go
                 // without the attachment and the error is logged (FPDM's die() can't be caught).
                 try {
+                    // Without invoice_pdf the PDF would sit in the invoice storage with nothing pointing
+                    // at it, and any core URL to it is refused by InvoiceFileDumpGuard.
+                    if (($settings['target.']['useInvoiceStorage'] ?? false) && $invoicePdfAnswer === null) {
+                        throw new \RuntimeException('target.useInvoiceStorage needs the hidden field invoice_pdf on the form', 1762700002);
+                    }
                     $powermailPdfFile = $this->generatePdf($mail);
                 } catch (\Throwable $e) {
                     $this->reportFailure($mail, $e);

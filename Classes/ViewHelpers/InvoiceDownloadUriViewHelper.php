@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Undkonsorten\Powermailpdf\ViewHelpers;
 
+use Psr\Http\Message\ServerRequestInterface;
 use TYPO3Fluid\Fluid\Core\ViewHelper\AbstractViewHelper;
 use Undkonsorten\Powermailpdf\Storage\InvoiceLinkBuilder;
 
@@ -30,6 +31,9 @@ final class InvoiceDownloadUriViewHelper extends AbstractViewHelper
         if (is_array($value)) {
             $value = reset($value);
         }
-        return $this->linkBuilder->forFileUid(is_scalar($value) ? (string)$value : null);
+        $request = $this->renderingContext->hasAttribute(ServerRequestInterface::class)
+            ? $this->renderingContext->getAttribute(ServerRequestInterface::class)
+            : null;
+        return $this->linkBuilder->forFileUid(is_scalar($value) ? (string)$value : null, $request);
     }
 }

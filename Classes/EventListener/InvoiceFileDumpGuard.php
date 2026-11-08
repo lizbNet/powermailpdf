@@ -9,7 +9,7 @@ use TYPO3\CMS\Core\Resource\Event\ModifyFileDumpEvent;
 use TYPO3\CMS\Core\Resource\File;
 use TYPO3\CMS\Core\Resource\FileInterface;
 use Undkonsorten\Powermailpdf\Storage\InvoiceLinkSignature;
-use Undkonsorten\Powermailpdf\Storage\InvoiceStorage;
+use Undkonsorten\Powermailpdf\Storage\InvoiceFileStorage;
 
 /**
  * eID=dumpFile for a file in the invoice storage needs our exp/sig on top of core's token:
@@ -19,7 +19,7 @@ use Undkonsorten\Powermailpdf\Storage\InvoiceStorage;
 final class InvoiceFileDumpGuard
 {
     public function __construct(
-        private readonly InvoiceStorage $invoiceStorage,
+        private readonly InvoiceFileStorage $invoiceStorage,
         private readonly InvoiceLinkSignature $signature,
         private readonly ResponseFactoryInterface $responseFactory,
     ) {

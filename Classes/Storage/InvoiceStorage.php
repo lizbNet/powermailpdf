@@ -15,7 +15,7 @@ use TYPO3\CMS\Core\Resource\StorageRepository;
  * environment. Found by its name, because its uid differs per environment and the
  * eID=dumpFile request that serves the files runs without TypoScript.
  */
-final class InvoiceStorage
+final class InvoiceStorage implements InvoiceFileStorage
 {
     public const NAME = 'invoice-pdf';
     public const BASE_PATH = '../var/invoice-pdf/';
