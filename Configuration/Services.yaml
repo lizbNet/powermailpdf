@@ -8,3 +8,6 @@ services:
     tags:
       - name: event.listener
         identifier: 'CreateActionBeforeRenderView'
+
+  Undkonsorten\Powermailpdf\Renderer\:
+    resource: '../Classes/Renderer/*'

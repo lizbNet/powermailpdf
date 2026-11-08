@@ -20,6 +20,9 @@
 		"in2code/powermail": "^12 || ^13 || ^14.0 || dev-eap",
 		"cweagans/composer-patches": "^1.7"
     },
+    "suggest": {
+		"bithost-gmbh/pdfviewhelpers": "Needed for renderer = fluid (invoice PDF from a Fluid template)"
+    },
 	"extra": {
 		"typo3/cms": {
 			"extension-key": "powermailpdf"
