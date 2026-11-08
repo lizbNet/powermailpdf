@@ -26,6 +26,11 @@ final class InvoiceDataMapper
         $vatRate = (int)($config['vatRate'] ?? 23);
         $quantity = max(1, (int)$this->text($answers, 'event_participants_number'));
         $gross = $this->amount($this->text($answers, 'invoice_price_all') ?: $this->text($answers, 'invoice_price'));
+        // Issue 05: a missing, unreadable or zero amount is a failure (Admin Alert, mails without the
+        // PDF), never a 0,00 pro forma. Free registrations get no PDF at all (skipWhen).
+        if ($gross <= 0.0) {
+            throw new \RuntimeException('No invoice amount in invoice_price_all / invoice_price', 1762800001);
+        }
         $net = round($gross / (1 + $vatRate / 100), 2);
         $vat = round($gross - $net, 2);
 
