@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Undkonsorten\Powermailpdf\Tests\Unit\Alert;
 
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\SentMessage;
+use Symfony\Component\Mailer\Transport\TransportInterface;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\RawMessage;
 use TYPO3\CMS\Core\Mail\MailerInterface;
@@ -14,14 +16,21 @@ use Undkonsorten\Powermailpdf\Alert\InvoicePdfFailureAlert;
 
 final class InvoicePdfFailureAlertTest extends TestCase
 {
-    private function fakeMailer(): MailerInterface
+    private function fakeMailer(?\Throwable $failWith = null): MailerInterface
     {
-        return new class () implements MailerInterface {
+        return new class ($failWith) implements MailerInterface {
             /** @var list<RawMessage> */
             public array $sent = [];
 
+            public function __construct(private readonly ?\Throwable $failWith)
+            {
+            }
+
             public function send(RawMessage $message, ?Envelope $envelope = null): void
             {
+                if ($this->failWith !== null) {
+                    throw $this->failWith;
+                }
                 $this->sent[] = $message;
             }
 
@@ -30,28 +39,32 @@ final class InvoicePdfFailureAlertTest extends TestCase
                 return null;
             }
 
-            public function getTransport(): \Symfony\Component\Mailer\Transport\TransportInterface
+            public function getTransport(): TransportInterface
             {
                 throw new \LogicException('not used');
             }
 
-            public function getRealTransport(): \Symfony\Component\Mailer\Transport\TransportInterface
+            public function getRealTransport(): TransportInterface
             {
                 throw new \LogicException('not used');
             }
         };
     }
 
-    public function testAlertNamesTheFormTheInvoiceAndTheError(): void
+    private function alert(MailerInterface $mailer, ?string $recipient = 'admin@example.com'): InvoicePdfFailureAlert
+    {
+        return new InvoicePdfFailureAlert($mailer, new NullLogger(), $recipient, 'forms@example.com');
+    }
+
+    public function testAlertNamesTheFormTheInvoiceAndTheErrorType(): void
     {
         $mailer = $this->fakeMailer();
-        $alert = new InvoicePdfFailureAlert($mailer, 'admin@example.com', 'forms@example.com');
 
-        $sent = $alert->send(
+        $sent = $this->alert($mailer)->send(
             'Dziecko w ubezpieczeniach 2026 (form 504)',
             '010/11/F/2026',
             'DWU26-11-F010',
-            new \RuntimeException('Invoice template not found: EXT:x/Proforma.html')
+            new \RuntimeException('Invoice template not found: EXT:x/Proforma.html', 1762632001)
         );
 
         self::assertTrue($sent);
@@ -65,7 +78,26 @@ final class InvoicePdfFailureAlertTest extends TestCase
         self::assertStringContainsString('Dziecko w ubezpieczeniach 2026 (form 504)', $body);
         self::assertStringContainsString('010/11/F/2026', $body);
         self::assertStringContainsString('DWU26-11-F010', $body);
-        self::assertStringContainsString('Invoice template not found: EXT:x/Proforma.html', $body);
+        self::assertStringContainsString('RuntimeException', $body);
+        self::assertStringContainsString('1762632001', $body);
+    }
+
+    public function testErrorMessageIsNotMailedBecauseItMayQuoteSubmittedData(): void
+    {
+        $mailer = $this->fakeMailer();
+
+        $this->alert($mailer)->send('form 504', '001/11/K/2026', 'DWU26-11-K001', new \TypeError('Jan Kowalski, ul. Prywatna 1'));
+
+        self::assertStringNotContainsString('Jan Kowalski', $mailer->sent[0]->getTextBody());
+        self::assertStringNotContainsString('Jan Kowalski', $mailer->sent[0]->getSubject());
+    }
+
+    public function testFailingMailerDoesNotThrow(): void
+    {
+        $sent = $this->alert($this->fakeMailer(new \RuntimeException('SMTP down')))
+            ->send('form 504', '001/11/K/2026', 'DWU26-11-K001', new \RuntimeException('x'));
+
+        self::assertFalse($sent);
     }
 
     public function testNoRecipientConfiguredSendsNothing(): void
@@ -74,7 +106,7 @@ final class InvoicePdfFailureAlertTest extends TestCase
         $previous = $GLOBALS['TYPO3_CONF_VARS']['BE']['warning_email_addr'] ?? null;
         $GLOBALS['TYPO3_CONF_VARS']['BE']['warning_email_addr'] = '';
         try {
-            $sent = (new InvoicePdfFailureAlert($mailer))->send('form 504', '', '', new \RuntimeException('x'));
+            $sent = $this->alert($mailer, null)->send('form 504', '', '', new \RuntimeException('x'));
         } finally {
             $GLOBALS['TYPO3_CONF_VARS']['BE']['warning_email_addr'] = $previous;
         }

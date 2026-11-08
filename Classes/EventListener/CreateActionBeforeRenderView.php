@@ -53,7 +53,7 @@ final class CreateActionBeforeRenderView
 
     /**
      * The mail has no uid yet (powermail saves it after this event), so the submission is named
-     * by form, Invoice Number and Invoice Code. A failing alert must not fail the submission.
+     * by form, Invoice Number and Invoice Code.
      */
     protected function reportFailure(Mail $mail, \Throwable $error): void
     {
@@ -73,11 +73,8 @@ final class CreateActionBeforeRenderView
             'invoiceCode' => $answers['invoice_code_all'] ?? '',
             'exception' => $error,
         ]);
-        try {
-            $this->failureAlert->send($formName, $answers['invoice_number'] ?? '', $answers['invoice_code_all'] ?? '', $error);
-        } catch (\Throwable $alertError) {
-            $this->logger->error('Invoice PDF failure alert could not be sent', ['exception' => $alertError]);
-        }
+        // The alert logs and swallows its own mailer errors.
+        $this->failureAlert->send($formName, $answers['invoice_number'] ?? '', $answers['invoice_code_all'] ?? '', $error);
     }
 
     /**
