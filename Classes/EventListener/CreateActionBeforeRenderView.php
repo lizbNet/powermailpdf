@@ -24,6 +24,7 @@ use Psr\Log\LoggerInterface;
 use Undkonsorten\Powermailpdf\Alert\InvoicePdfFailureAlert;
 use Undkonsorten\Powermailpdf\Renderer\FluidPdfRenderer;
 use Undkonsorten\Powermailpdf\Renderer\InvoiceDataMapper;
+use Undkonsorten\Powermailpdf\Storage\InvoiceStorage;
 
 
 /**
@@ -46,9 +47,20 @@ final class CreateActionBeforeRenderView
         private readonly TypoScriptService $typoScriptService,
         private readonly LoggerInterface $logger,
         private readonly InvoicePdfFailureAlert $failureAlert,
+        private readonly InvoiceStorage $invoiceStorage,
     ) {
         $this->resourceFactory = $resourceFactory;
         $this->viewFactory = $viewFactory;
+    }
+
+    private function answerByMarker(Mail $mail, string $marker): ?Answer
+    {
+        foreach ($mail->getAnswers() as $answer) {
+            if ($answer->getField()?->getMarker() === $marker) {
+                return $answer;
+            }
+        }
+        return null;
     }
 
     /** @return array<string, mixed> marker => submitted value */
@@ -206,7 +218,11 @@ final class CreateActionBeforeRenderView
         $this->encoding = $settings['encoding']??'';
 
         /** @var Folder $folder */
-        $folder = $this->resourceFactory->getFolderObjectFromCombinedIdentifier($settings['target.']['pdf']);
+        // target.useInvoiceStorage = 1: the non-public invoice storage (issue 03), found by name;
+        // a missing or duplicated storage throws into the failure path, never falls back to fileadmin.
+        $folder = ($settings['target.']['useInvoiceStorage'] ?? false)
+            ? $this->invoiceStorage->rootFolder()
+            : $this->resourceFactory->getFolderObjectFromCombinedIdentifier($settings['target.']['pdf']);
 
         if (($settings['renderer'] ?? 'fpdm') === 'fluid') {
             return $this->generateFluidPdf($mail, $settings, $folder);
@@ -310,6 +326,11 @@ final class CreateActionBeforeRenderView
         $mail = $event->getMail();
         $formController = $event->getFormController();
 
+        // invoice_pdf is a hidden field: whatever the browser posted is discarded before anything
+        // else, so a forged file uid never ends up on the mail or behind a signed link.
+        $invoicePdfAnswer = $this->answerByMarker($mail, 'invoice_pdf');
+        $invoicePdfAnswer?->setValue('');
+
         if (($settings['enablePowermailPdf'] ?? false) && !$this->isSkipped($mail, $settings)) {
             $resolvedSourceFile = ($settings['renderer'] ?? 'fpdm') === 'fluid' ? '' : $this->resolveSourceFile($mail, $settings);
             if ($resolvedSourceFile) {
@@ -323,13 +344,25 @@ final class CreateActionBeforeRenderView
                 // A failed render must not lose the submission or its Invoice ID: the mails go
                 // without the attachment and the error is logged (FPDM's die() can't be caught).
                 try {
+                    // Without invoice_pdf the PDF would sit in the invoice storage with nothing pointing
+                    // at it, and any core URL to it is refused by InvoiceFileDumpGuard.
+                    if (($settings['target.']['useInvoiceStorage'] ?? false) && $invoicePdfAnswer === null) {
+                        throw new \RuntimeException('target.useInvoiceStorage needs the hidden field invoice_pdf on the form', 1762700002);
+                    }
                     $powermailPdfFile = $this->generatePdf($mail);
                 } catch (\Throwable $e) {
                     $this->reportFailure($mail, $e);
                 }
             }
 
-            if ($powermailPdfFile !== null && ($settings['showDownloadLink'] ?? false)) {
+            // The mail keeps a reference to its PDF (sys_file uid), set only once the file exists.
+            if ($powermailPdfFile !== null && $invoicePdfAnswer !== null) {
+                $invoicePdfAnswer->setValue((string)$powermailPdfFile->getUid());
+            }
+
+            // Forms with invoice_pdf build the link in their template (pdf:invoiceDownloadUri), so no
+            // download-link field is created on the fly for them.
+            if ($powermailPdfFile !== null && $invoicePdfAnswer === null && ($settings['showDownloadLink'] ?? false)) {
                 $label = LocalizationUtility::translate("download", "powermailpdf");
                 //Adds a field for the download link at the thx site
                 /* @var $answer Answer */
