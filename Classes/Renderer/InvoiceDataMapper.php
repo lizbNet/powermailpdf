@@ -48,7 +48,6 @@ final class InvoiceDataMapper
         $totalNet = $this->markerAmount($answers, $totals['net'] ?? null) ?? $this->sum($items, 'net');
         $totalVat = $this->markerAmount($answers, $totals['vat'] ?? null) ?? $this->sum($items, 'vat');
         // Contradicting numbers on one document are worse than no document: fail into the alert path.
-        // Tolerance 0.01 for rounding.
         $this->assertConsistent($items, $totalGross, $totalNet, $totalVat);
         $vatSummary = $this->vatSummary($items);
         // One rate: the summary row is the total, so rounding per line can't make the two rows differ.
@@ -174,10 +173,8 @@ final class InvoiceDataMapper
      */
     private function markerAmount(array $answers, mixed $marker): ?float
     {
-        if (!is_string($marker) || $marker === '' || $this->text($answers, $marker) === '') {
-            return null;
-        }
-        return $this->amount($this->text($answers, $marker));
+        $value = is_string($marker) && $marker !== '' ? $this->text($answers, $marker) : '';
+        return $value === '' ? null : $this->amount($value);
     }
 
     /** @param list<array<string, mixed>> $items */
@@ -193,7 +190,9 @@ final class InvoiceDataMapper
             $checks['net + VAT vs gross of "' . $item['name'] . '"'] = [round((float)$item['net'] + (float)$item['vat'], 2), (float)$item['gross']];
         }
         foreach ($checks as $what => [$a, $b]) {
-            if (abs($a - $b) > 0.01) {
+            // Tolerance one grosz/cent, compared in whole minor units: line nets and the total net are
+            // rounded separately (pricing pilot), and a float compare would refuse an exact 0.01 gap.
+            if (abs((int)round($a * 100) - (int)round($b * 100)) > 1) {
                 throw new \RuntimeException(sprintf('Invoice amounts do not add up (%s: %.2f vs %.2f)', $what, $a, $b), 1762800002);
             }
         }

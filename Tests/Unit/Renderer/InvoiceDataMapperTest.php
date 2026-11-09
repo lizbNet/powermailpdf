@@ -152,12 +152,14 @@ final class InvoiceDataMapperTest extends TestCase
 
     public function testSubmittedCurrencyMatchingTheFormIsAccepted(): void
     {
-        $invoice = (new InvoiceDataMapper())->map($this->cevf(['price_currency' => ' eur ']), self::CEVF)['invoice'];
+        $config = self::CEVF;
+        $config['currency'] = 'EUR';
+        $invoice = (new InvoiceDataMapper())->map($this->cevf(['price_currency' => ' eur ']), $config)['invoice'];
 
         self::assertSame('EUR', $invoice['currency']);
     }
 
-    /** Option b: one bank account per form, so a submission in another currency gets no PDF. */
+    /** One bank account per form (issue 07, maintainer's choice), so another currency gets no PDF. */
     public function testSubmittedCurrencyOtherThanTheFormsIsRefused(): void
     {
         $this->expectExceptionCode(1762800004);
@@ -196,6 +198,21 @@ final class InvoiceDataMapperTest extends TestCase
     {
         $this->expectExceptionCode(1762800002);
         (new InvoiceDataMapper())->map($this->cevf(['invoice_vat1_amount' => '50.00', 'invoice_vat_all_amount' => '73.00']), self::CEVF);
+    }
+
+    /** Pricing pilot: line nets and the total net are rounded separately; a 0.01 gap is normal. */
+    public function testRoundingGapOfOneGroszBetweenLinesAndTotalsIsAccepted(): void
+    {
+        $config = self::CEVF;
+        unset($config['items']['10']['net'], $config['items']['10']['vat'], $config['items']['20']['net'], $config['items']['20']['vat']);
+        // lines 1.00 + 1.00: nets 0.81 + 0.81 = 1.62, VAT 0.19 + 0.19 = 0.38; totals from 2.00: 1.63 / 0.37
+        $invoice = (new InvoiceDataMapper())->map($this->cevf([
+            'invoice_price1_brutto' => '1.00', 'invoice_price2_brutto' => '1.00',
+            'invoice_price_all_brutto' => '2.00', 'invoice_price_all_netto' => '1.63', 'invoice_vat_all_amount' => '0.37',
+        ]), $config)['invoice'];
+
+        self::assertSame(2.0, $invoice['totalGross']);
+        self::assertSame(1.63, $invoice['totalNet']);
     }
 
     public function testDefaultsWithoutItemsConfigStayAsForDwu(): void
