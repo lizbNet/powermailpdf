@@ -325,4 +325,163 @@ final class InvoiceDataMapperTest extends TestCase
 
         self::assertSame('Warszawa', $invoice['buyer']['city']);
     }
+
+    /** Issue 07: the event's name and date are set once and used inside the line names. */
+    public function testEventVariablesFillTheLineNames(): void
+    {
+        $config = self::CEVF;
+        $config['event'] = ['name' => 'CENTRAL EUROPEAN VASCULAR FORUM - CEVF', 'date' => '22-23.10.2026'];
+        $config['items']['10']['name'] = 'Udział w konferencji {event.name} w dn. {event.date}';
+        $invoice = (new InvoiceDataMapper())->map($this->cevf(), $config)['invoice'];
+
+        self::assertSame('Udział w konferencji CENTRAL EUROPEAN VASCULAR FORUM - CEVF w dn. 22-23.10.2026', $invoice['items'][0]['name']);
+        self::assertSame(['name' => 'CENTRAL EUROPEAN VASCULAR FORUM - CEVF', 'date' => '22-23.10.2026'], $invoice['event']);
+    }
+
+    public function testEventVariablesFillTheSingleLineName(): void
+    {
+        $config = ['itemName' => 'Udział w konferencji „{event.name}” w dn. {event.date}', 'event' => ['name' => 'Dziecko w ubezpieczeniach', 'date' => '10.12.2026']] + self::CONFIG;
+        $invoice = (new InvoiceDataMapper())->map($this->company(), $config)['invoice'];
+
+        self::assertSame('Udział w konferencji „Dziecko w ubezpieczeniach” w dn. 10.12.2026', $invoice['items'][0]['name']);
+    }
+
+    /** A typo in a placeholder stays visible on the document instead of silently printing nothing. */
+    public function testUnknownEventPlaceholderIsKept(): void
+    {
+        $config = ['itemName' => 'Udział w {event.title}', 'event' => ['name' => 'X']] + self::CONFIG;
+        $invoice = (new InvoiceDataMapper())->map($this->company(), $config)['invoice'];
+
+        self::assertSame('Udział w {event.title}', $invoice['items'][0]['name']);
+    }
+
+    /** Issue 07: a form whose fields are named differently maps them in fluid.markers. */
+    public function testMarkersFromSettingsReplaceTheDefaults(): void
+    {
+        $config = ['markers' => [
+            'buyerName' => 'payer', 'street' => 'payer_street', 'postalCode' => 'payer_zip', 'city' => 'payer_city',
+            'nip' => 'payer_nip', 'number' => 'doc_number', 'date' => 'doc_date', 'code' => 'transfer_title',
+            'amountInWords' => 'words', 'currency' => 'cur', 'gross' => 'total', 'participants' => 'people',
+        ]] + self::CONFIG;
+        $invoice = (new InvoiceDataMapper())->map([
+            'payer' => 'Firma Sp. z o.o.', 'payer_street' => 'ul. Prosta 1', 'payer_zip' => '00-001', 'payer_city' => 'Warszawa',
+            'payer_nip' => '5270209936', 'doc_number' => '002/11/F/2026', 'doc_date' => '09.11.2026r.', 'transfer_title' => 'X26-11-F002',
+            'words' => 'trzysta złotych', 'cur' => 'PLN', 'total' => '300', 'people' => '2',
+            // the default markers are present too and must be ignored
+            'invoice_name_all' => 'Wrong', 'invoice_price_all' => '999', 'invoice_code_all' => 'WRONG',
+        ], $config)['invoice'];
+
+        self::assertSame('Firma Sp. z o.o.', $invoice['buyer']['name']);
+        self::assertSame(['ul. Prosta 1', '00-001', 'Warszawa', '527-020-99-36'], [$invoice['buyer']['street'], $invoice['buyer']['postalCode'], $invoice['buyer']['city'], $invoice['buyer']['nip']]);
+        self::assertSame(['002/11/F/2026', '09.11.2026 r.', 'X26-11-F002', 'trzysta złotych'], [$invoice['number'], $invoice['issueDate'], $invoice['code'], $invoice['amountInWords']]);
+        self::assertSame(300.0, $invoice['totalGross']);
+        self::assertSame(2, $invoice['items'][0]['quantity']);
+    }
+
+    public function testFallbackBuyerNameMarkersFromSettings(): void
+    {
+        $config = ['markers' => ['firstName' => 'first', 'lastName' => 'last']] + self::CONFIG;
+        $invoice = (new InvoiceDataMapper())->map(['first' => 'Anna', 'last' => 'Nowak', 'invoice_price_all' => '350'], $config)['invoice'];
+
+        self::assertSame('Anna Nowak', $invoice['buyer']['name']);
+    }
+
+    public function testCurrencyMarkerFromSettingsIsChecked(): void
+    {
+        $this->expectExceptionCode(1762800004);
+        $config = ['markers' => ['currency' => 'cur']] + self::CONFIG;
+        (new InvoiceDataMapper())->map($this->company(['cur' => 'EUR']), $config);
+    }
+
+    public function testUnknownMarkerRoleIsRefused(): void
+    {
+        $this->expectExceptionCode(1762800006);
+        $config = ['markers' => ['buyer' => 'payer']] + self::CONFIG;
+        (new InvoiceDataMapper())->map($this->company(), $config);
+    }
+
+    /** One line, participants priced by the pricing extension (p01_price, p02_price, ...). */
+    private const PER_PERSON = [
+        'vatRate' => '23',
+        'items' => ['10' => ['name' => 'Udział w konferencji', 'gross' => 'invoice_price1_brutto', 'participantGross' => 'p{nn}_price']],
+    ];
+
+    /** Issue 07: participants paying differently get one line per price, never an average. */
+    public function testParticipantsWithDifferentPricesGetOneLinePerPrice(): void
+    {
+        $invoice = (new InvoiceDataMapper())->map(
+            ['invoice_price1_brutto' => '400.00', 'p01_price' => '150.00', 'p02_price' => '100.00', 'p03_price' => '150.00', 'p04_price' => ''],
+            self::PER_PERSON
+        )['invoice'];
+
+        self::assertSame([[2, 150.0, 300.0], [1, 100.0, 100.0]], array_map(static fn(array $i): array => [$i['quantity'], $i['unitGross'], $i['gross']], $invoice['items']));
+        self::assertSame(['Udział w konferencji', 'Udział w konferencji'], array_column($invoice['items'], 'name'));
+        self::assertSame(400.0, $invoice['totalGross']);
+        self::assertSame(325.2, $invoice['totalNet']); // 243.90 + 81.30
+    }
+
+    public function testParticipantsWithTheSamePriceStayOneLine(): void
+    {
+        $invoice = (new InvoiceDataMapper())->map(
+            ['invoice_price1_brutto' => '300.00', 'p01_price' => '150.00', 'p02_price' => '150.00'],
+            self::PER_PERSON
+        )['invoice'];
+
+        self::assertSame([[2, 150.0, 300.0]], array_map(static fn(array $i): array => [$i['quantity'], $i['unitGross'], $i['gross']], $invoice['items']));
+    }
+
+    public function testParticipantPricesThatDoNotMatchTheLineAreRefused(): void
+    {
+        $this->expectExceptionCode(1762800005);
+        (new InvoiceDataMapper())->map(['invoice_price1_brutto' => '400.00', 'p01_price' => '150.00', 'p02_price' => '100.00'], self::PER_PERSON);
+    }
+
+    public function testParticipantPricesWithoutALineAmountMakeTheLine(): void
+    {
+        $config = self::PER_PERSON;
+        unset($config['items']['10']['gross']);
+        $invoice = (new InvoiceDataMapper())->map(['p01_price' => '150.00', 'p02_price' => '100.00'], $config)['invoice'];
+
+        self::assertSame(250.0, $invoice['totalGross']);
+        self::assertCount(2, $invoice['items']);
+    }
+
+    public function testWithoutParticipantPricesTheLineAmountIsUsed(): void
+    {
+        $invoice = (new InvoiceDataMapper())->map(['invoice_price1_brutto' => '150.00'], self::PER_PERSON)['invoice'];
+
+        self::assertSame([[1, 150.0, 150.0]], array_map(static fn(array $i): array => [$i['quantity'], $i['unitGross'], $i['gross']], $invoice['items']));
+    }
+
+    /**
+     * The pricing extension splits VAT on the line total; rows split one by one drift (here 6.05
+     * against 6.07). The largest row takes the difference, so the rows add up to the line.
+     */
+    public function testParticipantRowsAreReconciledToTheLineNet(): void
+    {
+        $config = self::PER_PERSON;
+        $config['items']['10'] += ['net' => 'invoice_price1_netto', 'vat' => 'invoice_vat1_amount'];
+        $config['totals'] = ['gross' => 'invoice_price_all_brutto', 'net' => 'invoice_price_all_netto', 'vat' => 'invoice_vat_all_amount'];
+        $invoice = (new InvoiceDataMapper())->map([
+            'p01_price' => '1.01', 'p02_price' => '1.10', 'p03_price' => '2.06', 'p04_price' => '3.29',
+            'invoice_price1_brutto' => '7.46', 'invoice_price1_netto' => '6.07', 'invoice_vat1_amount' => '1.39',
+            'invoice_price_all_brutto' => '7.46', 'invoice_price_all_netto' => '6.07', 'invoice_vat_all_amount' => '1.39',
+        ], $config)['invoice'];
+
+        self::assertSame([0.82, 0.89, 1.67, 2.69], array_column($invoice['items'], 'net'));
+        self::assertSame([0.19, 0.21, 0.39, 0.60], array_column($invoice['items'], 'vat'));
+        self::assertSame(6.07, $invoice['totalNet']);
+    }
+
+    public function testWrongLineNetIsNotAbsorbedByTheRows(): void
+    {
+        $this->expectExceptionCode(1762800002);
+        $config = self::PER_PERSON;
+        $config['items']['10'] += ['net' => 'invoice_price1_netto', 'vat' => 'invoice_vat1_amount'];
+        (new InvoiceDataMapper())->map([
+            'p01_price' => '150.00', 'p02_price' => '100.00',
+            'invoice_price1_brutto' => '250.00', 'invoice_price1_netto' => '200.00', 'invoice_vat1_amount' => '50.00',
+        ], $config);
+    }
 }
+
