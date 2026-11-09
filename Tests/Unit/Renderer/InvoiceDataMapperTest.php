@@ -119,14 +119,14 @@ final class InvoiceDataMapperTest extends TestCase
 
     public function testConfiguredItemsWithoutAnyAmountAreRefused(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800003);
         (new InvoiceDataMapper())->map($this->cevf(['invoice_price1_brutto' => '', 'invoice_price2_brutto' => '',
             'invoice_price_all_brutto' => '']), self::CEVF);
     }
 
     public function testRequiredItemWithoutAmountFailsEvenIfAnotherHasOne(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800003);
         // the conference line is required; only the optional dinner has an amount
         (new InvoiceDataMapper())->map($this->cevf(['invoice_price1_brutto' => '']), self::CEVF);
     }
@@ -146,17 +146,22 @@ final class InvoiceDataMapperTest extends TestCase
 
     public function testTotalsThatDoNotMatchTheLinesAreRefused(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800002);
         (new InvoiceDataMapper())->map($this->cevf(['invoice_price_all_brutto' => '999.00']), self::CEVF);
     }
 
-    public function testCurrencyComesFromTheSubmittedPriceCurrencyFirst(): void
+    public function testSubmittedCurrencyMatchingTheFormIsAccepted(): void
     {
-        $config = self::CEVF;
-        $config['currency'] = 'PLN';
-        $invoice = (new InvoiceDataMapper())->map($this->cevf(['price_currency' => ['eur']]), $config)['invoice'];
+        $invoice = (new InvoiceDataMapper())->map($this->cevf(['price_currency' => ' eur ']), self::CEVF)['invoice'];
 
         self::assertSame('EUR', $invoice['currency']);
+    }
+
+    /** Option b: one bank account per form, so a submission in another currency gets no PDF. */
+    public function testSubmittedCurrencyOtherThanTheFormsIsRefused(): void
+    {
+        $this->expectExceptionCode(1762800004);
+        (new InvoiceDataMapper())->map($this->cevf(['price_currency' => 'PLN']), self::CEVF);
     }
 
     public function testBlankCurrencyFallsBackToPln(): void
@@ -164,6 +169,33 @@ final class InvoiceDataMapperTest extends TestCase
         $config = self::CONFIG;
         $config['currency'] = '   ';
         self::assertSame('PLN', (new InvoiceDataMapper())->map($this->company(), $config)['invoice']['currency']);
+    }
+
+    public function testEmptyNetAndVatAnswersAreDerivedFromGross(): void
+    {
+        $invoice = (new InvoiceDataMapper())->map($this->cevf([
+            'invoice_price1_netto' => '', 'invoice_vat1_amount' => '',
+            'invoice_price2_brutto' => '', 'invoice_price_all_brutto' => '615.00',
+            'invoice_price_all_netto' => '', 'invoice_vat_all_amount' => '',
+        ]), self::CEVF)['invoice'];
+
+        // configured markers left empty: derived like an unconfigured line, totals as sums
+        self::assertSame(500.0, $invoice['items'][0]['net']);
+        self::assertSame(115.0, $invoice['items'][0]['vat']);
+        self::assertSame(500.0, $invoice['totalNet']);
+        self::assertSame(115.0, $invoice['totalVat']);
+    }
+
+    public function testNetTotalThatDoesNotMatchTheLinesIsRefused(): void
+    {
+        $this->expectExceptionCode(1762800002);
+        (new InvoiceDataMapper())->map($this->cevf(['invoice_price_all_netto' => '650.00']), self::CEVF);
+    }
+
+    public function testLineWhoseNetAndVatDoNotAddUpToGrossIsRefused(): void
+    {
+        $this->expectExceptionCode(1762800002);
+        (new InvoiceDataMapper())->map($this->cevf(['invoice_vat1_amount' => '50.00', 'invoice_vat_all_amount' => '73.00']), self::CEVF);
     }
 
     public function testDefaultsWithoutItemsConfigStayAsForDwu(): void
@@ -247,19 +279,19 @@ final class InvoiceDataMapperTest extends TestCase
     /** Issue 05: no invoice PDF with 0,00 totals; a missing amount takes the failure path (alert, mails without PDF). */
     public function testMissingAmountIsRefused(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800001);
         (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => '', 'invoice_price' => '']), self::CONFIG);
     }
 
     public function testNonNumericAmountIsRefused(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800001);
         (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => 'abc', 'invoice_price' => '']), self::CONFIG);
     }
 
     public function testZeroAmountIsRefused(): void
     {
-        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(1762800001);
         (new InvoiceDataMapper())->map($this->company(['invoice_price_all' => '0.00', 'invoice_price' => '0']), self::CONFIG);
     }
 

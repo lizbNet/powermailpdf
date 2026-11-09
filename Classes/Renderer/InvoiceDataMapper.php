@@ -17,8 +17,10 @@ namespace Undkonsorten\Powermailpdf\Renderer;
  * optional line (skipWhenEmpty) without amount is left out. Net and VAT come from the named
  * markers when configured (CEVF fills them server-side with the pricing pilot), else they are
  * derived from gross as above. fluid.totals names the total markers, else the totals are the sums
- * of the lines; a total that doesn't match its lines fails the PDF. Currency: price_currency
- * answer, then fluid.currency, then PLN. A line's gross is the line total: with participants of
+ * of the lines. Gross, net and VAT totals must match the lines and net + VAT the gross (each line
+ * too), within 0.01, else the PDF fails. A configured net/VAT marker with an empty answer counts as
+ * not configured (derived). Currency: fluid.currency (default PLN), the form's single account; a
+ * submission in another currency fails the PDF. A line's gross is the line total: with participants of
  * different prices the unit price printed is their average (issue 07, open).
  */
 final class InvoiceDataMapper
@@ -43,12 +45,11 @@ final class InvoiceDataMapper
         if ($items === [] || $totalGross <= 0.0) {
             throw new \RuntimeException('No invoice amount (gross of the line items or total)', 1762800001);
         }
-        // Contradicting numbers on one document are worse than no document: fail into the alert path.
-        if (abs($totalGross - $this->sum($items, 'gross')) > 0.01) {
-            throw new \RuntimeException(sprintf('Invoice total %.2f does not match its lines (%.2f)', $totalGross, $this->sum($items, 'gross')), 1762800002);
-        }
         $totalNet = $this->markerAmount($answers, $totals['net'] ?? null) ?? $this->sum($items, 'net');
         $totalVat = $this->markerAmount($answers, $totals['vat'] ?? null) ?? $this->sum($items, 'vat');
+        // Contradicting numbers on one document are worse than no document: fail into the alert path.
+        // Tolerance 0.01 for rounding.
+        $this->assertConsistent($items, $totalGross, $totalNet, $totalVat);
         $vatSummary = $this->vatSummary($items);
         // One rate: the summary row is the total, so rounding per line can't make the two rows differ.
         if (count($vatSummary) === 1) {
@@ -116,13 +117,13 @@ final class InvoiceDataMapper
             if (!is_array($definition)) {
                 continue;
             }
-            $gross = $this->amount($this->text($answers, (string)($definition['gross'] ?? '')));
+            $gross = $this->markerAmount($answers, $definition['gross'] ?? null) ?? 0.0;
             if ($gross <= 0.0) {
                 // an optional line (dinner) left empty; a required one makes the whole PDF fail
                 if ((bool)($definition['skipWhenEmpty'] ?? false)) {
                     continue;
                 }
-                return [];
+                throw new \RuntimeException(sprintf('Required invoice line "%s" has no amount', (string)($definition['name'] ?? '')), 1762800003);
             }
             $quantity = (string)($definition['quantity'] ?? '1');
             $quantity = ctype_digit($quantity) ? (int)$quantity : (int)$this->text($answers, $quantity);
@@ -167,25 +168,50 @@ final class InvoiceDataMapper
         return array_values($byRate);
     }
 
-    /** Amount of the marker named in the settings; null when the setting is absent. */
+    /**
+     * Amount of the marker named in the settings; null when the setting is absent or the answer is
+     * empty, so callers fall back (derive from gross, sum the lines) instead of printing 0,00.
+     */
     private function markerAmount(array $answers, mixed $marker): ?float
     {
-        return is_string($marker) && $marker !== '' ? $this->amount($this->text($answers, $marker)) : null;
+        if (!is_string($marker) || $marker === '' || $this->text($answers, $marker) === '') {
+            return null;
+        }
+        return $this->amount($this->text($answers, $marker));
+    }
+
+    /** @param list<array<string, mixed>> $items */
+    private function assertConsistent(array $items, float $gross, float $net, float $vat): void
+    {
+        $checks = [
+            'gross total vs lines' => [$gross, $this->sum($items, 'gross')],
+            'net total vs lines' => [$net, $this->sum($items, 'net')],
+            'VAT total vs lines' => [$vat, $this->sum($items, 'vat')],
+            'net + VAT vs gross total' => [round($net + $vat, 2), $gross],
+        ];
+        foreach ($items as $item) {
+            $checks['net + VAT vs gross of "' . $item['name'] . '"'] = [round((float)$item['net'] + (float)$item['vat'], 2), (float)$item['gross']];
+        }
+        foreach ($checks as $what => [$a, $b]) {
+            if (abs($a - $b) > 0.01) {
+                throw new \RuntimeException(sprintf('Invoice amounts do not add up (%s: %.2f vs %.2f)', $what, $a, $b), 1762800002);
+            }
+        }
     }
 
     /**
-     * The submitted price_currency first (sw_connector decides on the amount in words from it, so
-     * code and words agree), then fluid.currency, then PLN.
+     * The form's currency (fluid.currency, default PLN): its bank account in fluid.seller is fixed
+     * per form. A submission whose price_currency differs gets no PDF (failure path) rather than an
+     * invoice naming one currency next to another currency's account.
      */
     private function currency(array $answers, array $config): string
     {
-        foreach ([$this->text($answers, 'price_currency'), (string)($config['currency'] ?? '')] as $candidate) {
-            $candidate = strtoupper(trim($candidate));
-            if ($candidate !== '') {
-                return $candidate;
-            }
+        $formCurrency = strtoupper(trim((string)($config['currency'] ?? ''))) ?: 'PLN';
+        $submitted = strtoupper(trim($this->text($answers, 'price_currency')));
+        if ($submitted !== '' && $submitted !== $formCurrency) {
+            throw new \RuntimeException(sprintf('Submission is in %s, the form invoices in %s (one bank account per form)', $submitted, $formCurrency), 1762800004);
         }
-        return 'PLN';
+        return $formCurrency;
     }
 
     /** @param list<array<string, mixed>> $items */
