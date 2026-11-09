@@ -168,7 +168,8 @@ final class InvoiceDataMapper
             $gross = $this->markerAmount($answers, $definition['gross'] ?? null);
             $perPrice = $this->participantPrices($answers, (string)($definition['participantGross'] ?? ''));
             if ($perPrice !== []) {
-                array_push($items, ...$this->participantItems($name, $perPrice, $gross, $rate));
+                $lineNet = $this->markerAmount($answers, $definition['net'] ?? null);
+                array_push($items, ...$this->participantItems($name, $perPrice, $gross, $lineNet, $rate));
                 continue;
             }
             $gross ??= 0.0;
@@ -212,13 +213,16 @@ final class InvoiceDataMapper
 
     /**
      * One line per distinct participant price (quantity x unit price), so no average is printed.
-     * Net and VAT are derived per line; the line's own gross marker, when answered, must equal the
-     * participants' sum.
+     * The line's own gross marker, when answered, must equal the participants' sum. Net is derived
+     * per row, then reconciled: the pricing extension splits VAT on the line total, and rows split
+     * one by one drift from it (2 grosze from four prices on), which would fail the totals check.
+     * The largest row takes the difference against the line's net (its marker, else the split of
+     * the sum), so the rows add up to the line.
      *
      * @param array<int, int> $perPrice
      * @return list<array<string, mixed>>
      */
-    private function participantItems(string $name, array $perPrice, ?float $lineGross, int $rate): array
+    private function participantItems(string $name, array $perPrice, ?float $lineGross, ?float $lineNet, int $rate): array
     {
         $items = [];
         $sum = 0;
@@ -228,6 +232,17 @@ final class InvoiceDataMapper
         }
         if ($lineGross !== null && abs((int)round($lineGross * 100) - $sum) > 1) {
             throw new \RuntimeException(sprintf('Participant prices of "%s" (%.2f) do not add up to the line (%.2f)', $name, $sum / 100, $lineGross), 1762800005);
+        }
+        $targetNet = $lineNet !== null ? (int)round($lineNet * 100) : (int)round($sum / 100 / (1 + $rate / 100) * 100);
+        $drift = $targetNet - array_sum(array_map(static fn(array $i): int => (int)round($i['net'] * 100), $items));
+        // only rounding drift (under half a grosz per row) is absorbed; anything larger is a wrong net
+        if (abs($drift) > intdiv(count($items) + 1, 2)) {
+            throw new \RuntimeException(sprintf('Invoice amounts do not add up (net of "%s": %.2f vs participants %.2f)', $name, $targetNet / 100, ($targetNet - $drift) / 100), 1762800002);
+        }
+        if ($drift !== 0) {
+            $largest = array_search(max(array_column($items, 'gross')), array_column($items, 'gross'), true);
+            $net = round($items[$largest]['net'] + $drift / 100, 2);
+            $items[$largest] = ['net' => $net, 'vat' => round($items[$largest]['gross'] - $net, 2)] + $items[$largest];
         }
         return $items;
     }

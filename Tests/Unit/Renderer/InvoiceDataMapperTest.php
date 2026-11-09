@@ -452,5 +452,36 @@ final class InvoiceDataMapperTest extends TestCase
 
         self::assertSame([[1, 150.0, 150.0]], array_map(static fn(array $i): array => [$i['quantity'], $i['unitGross'], $i['gross']], $invoice['items']));
     }
+
+    /**
+     * The pricing extension splits VAT on the line total; rows split one by one drift (here 6.05
+     * against 6.07). The largest row takes the difference, so the rows add up to the line.
+     */
+    public function testParticipantRowsAreReconciledToTheLineNet(): void
+    {
+        $config = self::PER_PERSON;
+        $config['items']['10'] += ['net' => 'invoice_price1_netto', 'vat' => 'invoice_vat1_amount'];
+        $config['totals'] = ['gross' => 'invoice_price_all_brutto', 'net' => 'invoice_price_all_netto', 'vat' => 'invoice_vat_all_amount'];
+        $invoice = (new InvoiceDataMapper())->map([
+            'p01_price' => '1.01', 'p02_price' => '1.10', 'p03_price' => '2.06', 'p04_price' => '3.29',
+            'invoice_price1_brutto' => '7.46', 'invoice_price1_netto' => '6.07', 'invoice_vat1_amount' => '1.39',
+            'invoice_price_all_brutto' => '7.46', 'invoice_price_all_netto' => '6.07', 'invoice_vat_all_amount' => '1.39',
+        ], $config)['invoice'];
+
+        self::assertSame([0.82, 0.89, 1.67, 2.69], array_column($invoice['items'], 'net'));
+        self::assertSame([0.19, 0.21, 0.39, 0.60], array_column($invoice['items'], 'vat'));
+        self::assertSame(6.07, $invoice['totalNet']);
+    }
+
+    public function testWrongLineNetIsNotAbsorbedByTheRows(): void
+    {
+        $this->expectExceptionCode(1762800002);
+        $config = self::PER_PERSON;
+        $config['items']['10'] += ['net' => 'invoice_price1_netto', 'vat' => 'invoice_vat1_amount'];
+        (new InvoiceDataMapper())->map([
+            'p01_price' => '150.00', 'p02_price' => '100.00',
+            'invoice_price1_brutto' => '250.00', 'invoice_price1_netto' => '200.00', 'invoice_vat1_amount' => '50.00',
+        ], $config);
+    }
 }
 
